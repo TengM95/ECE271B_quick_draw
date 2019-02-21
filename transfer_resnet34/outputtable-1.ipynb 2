@@ -136,8 +136,8 @@ window.mathjax_url = "/static/components/MathJax/MathJax.js";
  
 data-base-url="/"
 data-ws-url=""
-data-notebook-name="run_test.ipynb"
-data-notebook-path="PA3/run_test.ipynb"
+data-notebook-name="outputtable-1.ipynb"
+data-notebook-path="PA3/outputtable-1.ipynb"
 
 dir="ltr">
 
