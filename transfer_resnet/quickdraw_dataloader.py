@@ -32,19 +32,20 @@ from PIL import Image
 import numpy as np 
 import pandas as pd
 import matplotlib.pyplot as plt
+import torch.utils.data as data
 
 # Uncomment for Python2
 # from __future__ import print_function
 
 
 
-class ChestXrayDataset(Dataset):
+class QuickDrawDataset(Dataset):
     """Custom Dataset class for the Chest X-Ray Dataset.
 
     The expected dataset is stored in the "/datasets/ChestXray-NIHCC/" on ieng6
     """
     
-    def __init__(self, transform=transforms.ToTensor(), color='L'):
+    def __init__(self, root_dir ,file_dir ,transform=transforms.ToTensor(), color='L'):
         """
         Args:
         -----
@@ -65,21 +66,24 @@ class ChestXrayDataset(Dataset):
         
         self.transform = transform
         self.color = color
-        self.image_dir = "/datasets/ChestXray-NIHCC/images/"
-        self.image_info = pd.read_csv("/datasets/ChestXray-NIHCC/Data_Entry_2017.csv")
-        self.image_filenames = self.image_info["Image Index"]
-        self.labels = self.image_info["Finding Labels"]
-        self.classes = {0: "Atelectasis", 1: "Cardiomegaly", 2: "Effusion", 
-                3: "Infiltration", 4: "Mass", 5: "Nodule", 6: "Pneumonia", 
-                7: "Pneumothorax", 8: "Consolidation", 9: "Edema", 
-                10: "Emphysema", 11: "Fibrosis", 
-                12: "Pleural_Thickening", 13: "Hernia"}
-
+        self.file_dir = root_dir+file_dir
+        self.label_dir = "labels.txt"
+        
+        f = open(self.label_dir,"r")
+        # And for reading use
+        classes = f.read()
+        f.close()
+        classes_list = classes.split('\n')
+        file_dir_list = file_dir.split('.')
+        index_class = classes_list.index(file_dir_list[0])
+        self.length = int(classes_list[index_class-1])
+        self.label = self.oneHot(int(index_class//2))
+        
         
     def __len__(self):
         
         # Return the total number of data samples
-        return len(self.image_filenames)
+        return self.length
 
 
     def __getitem__(self, ind):
@@ -94,50 +98,36 @@ class ChestXrayDataset(Dataset):
         --------
         - A tuple (image, label)
         """
-        
-        # Compose the path to the image file from the image_dir + image_name
-        image_path = os.path.join(self.image_dir, self.image_filenames.ix[ind])
-        
-        # Load the image
-        image = Image.open(image_path).convert(mode=str(self.color))
-
-        # If a transform is specified, apply it
+        self.images = np.load(self.file_dir)
+        image =  self.images[ind]
+        image = image.reshape((28,28,1))
+        #If a transform is specified, apply it
         if self.transform is not None:
             image = self.transform(image)
             
         # Verify that image is in Tensor format
-        if type(image) is not torch.Tensor:
-            image = transform.ToTensor(image)
+        #if type(image) is not torch.Tensor:
+        #    image = transform.ToTensor(image)
 
         # Convert multi-class label into binary encoding 
-        label = self.convert_label(self.labels[ind], self.classes)
+
+        label = self.label
         
         # Return the image and its label
         return (image, label)
-
     
-
-    def convert_label(self, label, classes):
-        """Convert the numerical label to n-hot encoding.
-        
-        Params:
-        -------
-        - label: a string of conditions corresponding to an image's class
-
-        Returns:
-        --------
-        - binary_label: (Tensor) a binary encoding of the multi-class label
+    def oneHot(self, number, max_val=345):
+        """ Computes onehot.
+        Input: Y_oh: list of number
+              max_val: The max one-hot size
+        Returns: 2D list correspind to the each label's one hot representation
         """
-        
-        binary_label = torch.zeros(len(classes))
-        for key, value in classes.items():
-            if value in label:
-                binary_label[key] = 1.0
-        return binary_label
-    
+        onehot = [0] * (int(max_val))
+        onehot[number] = 1
+        return np.array(onehot)
     
 
-def create_split_loaders(batch_size, seed, transform=transforms.ToTensor(),
+def create_split_loaders(root_dir, batch_size, seed=0, transform=transforms.ToTensor(),
                          p_val=0.1, p_test=0.2, shuffle=True, 
                          show_sample=False, extras={}):
     """ Creates the DataLoader objects for the training, validation, and test sets. 
@@ -165,12 +155,21 @@ def create_split_loaders(batch_size, seed, transform=transforms.ToTensor(),
     - val_loader: (DataLoader) The iterator for the validation set
     - test_loader: (DataLoader) The iterator for the test set
     """
-
-    # Get create a ChestXrayDataset object
-    dataset = ChestXrayDataset(transform)
+    
+    
+    
+    list_of_datasets = []
+    for j in os.listdir(root_dir):
+        if not j.endswith('.npy'):
+            continue  # skip non-json files
+        list_of_datasets.append(QuickDrawDataset(root_dir=root_dir, file_dir=j, transform=transform))
+    # once all single json datasets are created you can concat them into a single one:
+    quickdraw_dataset = data.ConcatDataset(list_of_datasets)
+    
+    
 
     # Dimensions and indices of training set
-    dataset_size = len(dataset)
+    dataset_size = len(quickdraw_dataset)
     all_indices = list(range(dataset_size))
 
     # Shuffle dataset before dividing into training & test sets
@@ -199,15 +198,15 @@ def create_split_loaders(batch_size, seed, transform=transforms.ToTensor(),
         pin_memory = extras["pin_memory"]
         
     # Define the training, test, & validation DataLoaders
-    train_loader = DataLoader(dataset, batch_size=batch_size, 
+    train_loader = DataLoader(quickdraw_dataset, batch_size=batch_size, 
                               sampler=sample_train, num_workers=num_workers, 
                               pin_memory=pin_memory)
 
-    test_loader = DataLoader(dataset, batch_size=batch_size, 
+    test_loader = DataLoader(quickdraw_dataset, batch_size=batch_size, 
                              sampler=sample_test, num_workers=num_workers, 
                               pin_memory=pin_memory)
 
-    val_loader = DataLoader(dataset, batch_size=batch_size,
+    val_loader = DataLoader(quickdraw_dataset, batch_size=batch_size,
                             sampler=sample_val, num_workers=num_workers, 
                               pin_memory=pin_memory)
 

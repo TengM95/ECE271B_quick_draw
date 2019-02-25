@@ -17,11 +17,6 @@ import matplotlib.pyplot as plt
 import time
 import os
 import copy
-
-
-# In[2]:
-
-
 import torch
 import os
 from PIL import Image
@@ -31,80 +26,18 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F 
 
 
-image_info = pd.read_csv("/datasets/ChestXray-NIHCC/Data_Entry_2017.csv")
-labels = image_info["Finding Labels"]
-classes = {0: "Atelectasis", 1: "Cardiomegaly", 2: "Effusion", 
-                3: "Infiltration", 4: "Mass", 5: "Nodule", 6: "Pneumonia", 
-                7: "Pneumothorax", 8: "Consolidation", 9: "Edema", 
-                10: "Emphysema", 11: "Fibrosis", 
-                12: "Pleural_Thickening", 13: "Hernia",14:"No Finding" }
-class_label  = {v: k for k, v in classes.items()}
-label_stats = []
-for l in labels: 
-    l_list = l.split('|')
-    
-    for z in l_list:
-        label_stats.append(class_label[z])
+# In[2]:
 
-data = label_stats
 
-# fixed bin size
-bins = np.arange(0, 16, 1) # fixed bin size
-
-plt.xlim([min(data)-1, max(data)+1])
-
-plt.hist(data, bins=bins, alpha=0.5)
-plt.title('label_stats')
-plt.xlabel('labels'"")
-plt.ylabel('count')
-
-plt.show()
-
-counts, b, bars = plt.hist(data,bins=bins)
-print(len(counts))
-# print((counts))
-minus_counts = 112120 - counts
-# print(minus_counts)
-
-weight_bce = minus_counts/counts
-# print(weight_bce)
-ratio = 1.0*counts/sum(counts)
-
-weight_bce = weight_bce[0:-1]
-# print(weight_bce.shape)
-weight_temp = np.ones((len(weight_bce)))
-
-weight_bce = torch.from_numpy(np.array(np.log10(weight_bce)*18)).type(torch.cuda.FloatTensor)
+import torchvision.models as models
+model = models.resnet34(pretrained=True)
+model.fc = nn.Sequential(nn.Linear(512, 345))
 
 
 # In[3]:
 
 
-weight_bce
-
-
-# In[4]:
-
-
-import torchvision.models as models
-model = models.resnet34(pretrained=True)
-model.fc = nn.Sequential(nn.Linear(512, 14))
-
-
-# In[5]:
-
-
-#ct = 0
-#for child in model.children():
-#    ct += 1
-#    if ct < 9:
-#        for param in child.parameters():
-#            param.requires_grad = False
-
-
-# In[6]:
-
-
+# maynot useful 
 class FocalLoss2d(nn.modules.loss._WeightedLoss):
 
     def __init__(self, gamma=2, weight=None, size_average=None, ignore_index=-100,
@@ -135,18 +68,15 @@ class FocalLoss2d(nn.modules.loss._WeightedLoss):
         return balanced_focal_loss
 
 
-# In[7]:
-
-
-from baseline_cnn import *
+# In[4]:
 
 
 # Setup: initialize the hyperparameters/variables
 # Setup: initialize the hyperparameters/variables
 num_epochs = 10           # Number of full passes through the dataset
-batch_size = 128          # Number of samples in each minibatch
-learning_rate = 0.001  
-seed = np.random.seed(1) # Seed the random number generator for reproducibility
+batch_size = 128         # Number of samples in each minibatch
+learning_rate = 0.01  
+seed = np.random.seed(0) # Seed the random number generator for reproducibility
 p_val = 0.1              # Percent of the overall dataset to reserve for validation
 p_test = 0.2             # Percent of the overall dataset to reserve for testing
 
@@ -155,11 +85,15 @@ p_test = 0.2             # Percent of the overall dataset to reserve for testing
 
 transform = transforms.Compose([
         #transforms.RandomResizedCrop(224),
-        #transforms.RandomHorizontalFlip(),
-        transforms.Resize([224,224]),
+        transforms.ToPILImage('L'),
+        transforms.Resize([224,224],interpolation=2),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
+
+
+# In[5]:
+
 
 
 # Check if your system supports CUDA
@@ -177,14 +111,27 @@ else: # Otherwise, train on the CPU
 
 model = model
 model = model.to(computing_device)
-    
+print("Model on CUDA?", next(model.parameters()).is_cuda)    
+
+
+# In[6]:
+
+
+### need to modify
 # Setup the training, validation, and testing dataloaders
-train_loader, val_loader, test_loader = create_split_loaders(batch_size, seed, transform=transform, 
+import quickdraw_dataloader as qd
+from quickdraw_dataloader import create_split_loaders
+root_dir = "./data_subset/"
+train_loader, val_loader, test_loader = create_split_loaders(root_dir,batch_size, seed, transform=transform, 
                                                              p_val=p_val, p_test=p_test,
                                                              shuffle=True, show_sample=False, 
                                                              extras=extras)
 
-criterion = FocalLoss2d(weight=weight_bce).to(computing_device)
+
+# In[7]:
+
+
+criterion = nn.CrossEntropyLoss().to(computing_device)
 
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001)
 
@@ -194,69 +141,7 @@ exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 # In[8]:
 
 
-print("Model on CUDA?", next(model.parameters()).is_cuda)
-
-
-# In[9]:
-
-
-import torch.nn.functional as F
-
-
-# In[10]:
-
-
-import numpy as np
-# label = np.asarray([[1, 0, 0], [0, 1, 1], [0, 1, 1]])
-# output = np.asarray([[0, 0.9, 0], [0, 0.9, 0], [0.9, 0, 0.6]])
-def prediction(labels, outputs):
-    threshold = 0.5
-    num_cor = 0
-    num_tp = 0
-    num_fp = 0
-    num_fn = 0
-    num_total = labels.shape[0]*labels.shape[1]
-    test_result = np.zeros((labels.shape))
-    
-    temp_position = np.where(outputs >= threshold)
-    
-    test_result[temp_position] = 1
-        
-    temp_position0 = np.array(np.where(test_result == 1.0)).T.tolist()
-    temp_position1 = np.array(np.where(labels == 1)).T.tolist()
-          
-    temp_position2 = np.array(np.where(test_result == 0.0)).T.tolist()
-    temp_position3 = np.array(np.where(labels == 0)).T.tolist()
-    
-    temp_position4 = np.array(np.where(labels == test_result)).T.tolist()
-    
-    
-    num_cor = len(temp_position4)
-    for element in temp_position0:
-        if element in temp_position1:
-            num_tp += 1
-    
-    for element in temp_position0:
-        if element in temp_position3:
-            num_fp += 1   
-    
-    for element in temp_position2:
-        if element in temp_position1:
-            num_fn += 1      
-  
-    accuracy = num_cor/num_total
-    if num_fp + num_tp == 0:
-        precision = 0
-    else:
-        precision = num_tp/(num_fp + num_tp)
-    if num_tp + num_fn == 0:
-        recall = 0
-    else:
-        recall = num_tp/(num_tp + num_fn)
-    bcr = (precision + recall)/2
-    return accuracy, precision, recall, bcr
 def validate(val_loader,model,optimizer):
-  
     start = time.time()
     sum_loss = 0.0
     list_sum_loss = []
@@ -267,25 +152,27 @@ def validate(val_loader,model,optimizer):
             optimizer.zero_grad()      
             val_images = torch.squeeze(torch.stack([val_images,val_images,val_images], dim=1, out=None))
             val_images, val_labels = val_images.to(computing_device), val_labels.to(computing_device)
+            val_labels = val_labels.type(torch.cuda.FloatTensor)
             outputs = model(val_images)
-            outputs = torch.sigmoid(outputs)
-            loss = criterion(outputs,val_labels)
+            loss = criterion(outputs,torch.max(val_labels, 1)[1])
             sum_loss += loss
     print("validation time = ", time.time()-start)    
     return 1.0*sum_loss/mb_count  
 
 
-# In[15]:
+# In[9]:
 
 
-def save_checkpoint(state, is_best=0, filename='models/checkpoint.pth.tar'):
-    torch.save(state, filename)
+def accuracy(out, labels):
+    outputs = np.argmax(out, axis=1)
+    lab = np.argmax(labels, axis=1)
+    return np.sum(outputs==lab)/float(lab.size)
 
 
-# In[16]:
+# In[10]:
 
 
-def train_model(model, criterion, optimizer, scheduler, num_epochs=5):
+def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
     since = time.time()
     total_loss = []
     avg_minibatch_loss = []
@@ -293,9 +180,10 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=5):
     tolerence = 3
     i = 0 
     for epoch in range(num_epochs):
-        N = 50
-        M = 50
+        N = 100
+        M = 1000
         N_minibatch_loss = 0.0    
+        best_loss = 100
         early_stop = 0
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -308,21 +196,23 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=5):
                 inputs = torch.squeeze(torch.stack([inputs,inputs,inputs], dim=1, out=None))
                 inputs = inputs.to(computing_device)
                 labels = labels.to(computing_device)
-                
+                labels = labels.long()
                 optimizer.zero_grad()
 
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
-                    
-                    loss = criterion(outputs, labels)
+                    labels = labels.long()
+                    loss = criterion(outputs,torch.max(labels, 1)[1])
+                    #loss = criterion(torch.max(outputs,1)[1],torch.max(labels, 1)[1])
                     N_minibatch_loss += loss
                     # backward + optimize only if in training phase
                     loss.backward()
                     optimizer.step()
                 
                 # statistics
+                # training stats
                 if minibatch_count % N == 0 and minibatch_count!=0:    
 
                     # Print the loss averaged over the last N mini-batches    
@@ -332,37 +222,41 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=5):
 
                     # Add the averaged loss over N minibatches and reset the counter
                     avg_minibatch_loss.append(N_minibatch_loss)
+                    
+                    avg_minibatch_loss_1 = np.array(avg_minibatch_loss)
+                    np.save('avg_minibatch_loss_new', avg_minibatch_loss_1)
+                    
                     N_minibatch_loss = 0.0
 
                     output_np = outputs.cpu().detach().numpy()
                     label_np = labels.cpu().detach().numpy()
 
-                    accuracy, precision, recall, bcr = prediction(label_np, output_np)
-                    print('accuracy, precision, recall', accuracy, precision, recall)
+                    accuracy_train = accuracy(label_np, output_np)
+                    print('accuracy',accuracy_train)
+                    #print('accuracy, precision, recall', accuracy, precision, recall)
+                
+                #Validation
                 if minibatch_count % M == 0 and minibatch_count!=0: 
                     #model = torch.load('./checkpoint')
                     save_checkpoint({'epoch': epoch + 1,
                                 'state_dict': model.state_dict(),
                                 'optimizer': optimizer.state_dict(),
                                 },
-                                filename='./checkpoint/'+'%d_model_epochnew%d.pth' % (epoch , minibatch_count))
+                                filename='./checkpoint/'+'%d_model_epoch%d.pth' % (epoch , minibatch_count))
                     v_loss = validate(val_loader,model,optimizer).item()
                     print(v_loss)
                     total_vali_loss.append(v_loss)
-                    
-                    if total_vali_loss[i] > total_vali_loss[i-1] and i != 0:
+
+                    total_vali_loss_1 = np.array(total_vali_loss)
+                    np.save('total_vali_loss_new', total_vali_loss_1)                    
+
+                    if total_vali_loss[i] > best_loss and i != 0:
                         early_stop += 1
                         if early_stop == tolerence:
-
-                            avg_minibatch_loss_1 = np.array(avg_minibatch_loss)
-                            np.save('avg_minibatch_loss_new', avg_minibatch_loss_1)
-
-                            total_vali_loss_1 = np.array(total_vali_loss)
-                            np.save('total_vali_loss_new', total_vali_loss_1)                    
-
                             print('early stop here')
                             break
                     else:
+                        best_loss = total_vali_loss[i] 
                         early_stop = 0
                     i = i + 1
             print("Finished", epoch + 1, "epochs of training")
@@ -382,12 +276,66 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=5):
         time_elapsed // 60, time_elapsed % 60))
 
 
-# In[17]:
+# In[11]:
+
+
+def save_checkpoint(state, is_best=0, filename='models/checkpoint.pth.tar'):
+    torch.save(state, filename)
+
+
+# In[ ]:
 
 
 model_trained = train_model(model, criterion, optimizer, exp_lr_scheduler, num_epochs=5)
 
 
+# In[14]:
+
+
+# import matplotlib.pyplot as plt
+# from IPython.display import display # to display images
+# for minibatch_count, (inputs, labels) in enumerate(train_loader, 0):
+#     print(inputs.shape)
+#     #inputs = inputs.to(computing_device)
+#     #labels = labels.to(computing_device)
+#     image = inputs.cpu().detach().numpy()[1].reshape((224,224))*255
+    
+#     print(image.sum())
+#     plt.imshow(image.astype(int),)
+#     plt.show()
+#     image = inputs.cpu().detach().numpy()[0].reshape((224,224))*255
+    
+#     print(image.sum())
+#     plt.imshow(image.astype(int),)
+#     plt.show()
+#     image = inputs.cpu().detach().numpy()[2].reshape((224,224))*255
+    
+#     print(image.sum())
+#     plt.imshow(image.astype(int),)
+#     plt.show()
+    
+#     image = inputs.cpu().detach().numpy()[3].reshape((224,224))*255
+    
+#     print(image.sum())
+#     plt.imshow(image.astype(int),)
+#     plt.show()
+#     #image = Image.fromarray(image.astype(int),"L")
+#     #display(image)
+#     if minibatch_count >10: 
+#         break
+    
+
+
+# In[ ]:
+
+
+# >>> loss = nn.CrossEntropyLoss()
+# >>> input = torch.randn(3, 5, requires_grad=True)
+# >>> target = torch.empty(3, dtype=torch.long).random_(5)
+# >>> output = loss(input, target)
+# >>> output.backward()
+
+
 # In[ ]:
 
 
@@ -397,19 +345,7 @@ model_trained = train_model(model, criterion, optimizer, exp_lr_scheduler, num_e
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
+# input
 
 
 # In[ ]:
