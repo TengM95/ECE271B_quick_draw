@@ -77,7 +77,7 @@ class QuickDrawDataset(Dataset):
         file_dir_list = file_dir.split('.')
         index_class = classes_list.index(file_dir_list[0])
         self.length = int(classes_list[index_class-1])
-        self.label = self.oneHot(int(index_class//2))
+        self.label = int(index_class//2)
         
         
     def __len__(self):
