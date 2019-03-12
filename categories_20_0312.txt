@@ -1,0 +1,26 @@
+The_Eiffel_Tower
+umbrella
+house_plant
+star
+snowman
+envelope
+swing_set
+crown
+chair
+television
+hourglass
+tennis_racquet
+pear
+grass
+bowtie
+strawberry
+clock
+whale
+bus
+School bus
+
+
+
+
+
+
